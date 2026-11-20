@@ -101,14 +101,15 @@ def ling_v3_flash_sft_64gpu_h100_bf16_config() -> ConfigContainer:
 
 
 def ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config() -> ConfigContainer:
-    """Train Flash's first six blocks at sequence length 4096 on eight H100 GPUs.
+    """Train Flash's first six main blocks plus MTP at length 4096 on eight H100s.
 
     This early, unoptimized functional smoke keeps the first group of five
     KDA blocks and one MLA block, including its original dense/MoE schedule
     and clipping limits. Production hidden/head/expert dimensions are retained.
     Inherit the 64-GPU SFT baseline's optimizer, precision, m-FSDP v1, and EP8
-    settings (expert-DP1 on eight GPUs). Override only the reduced workload and
-    random-initialization smoke controls. No MTP or checkpoint I/O is enabled.
+    settings (expert-DP1 on eight GPUs), including one MTP layer with zero
+    auxiliary-loss weight. Override only the reduced workload and
+    random-initialization smoke controls. Checkpoint I/O is disabled.
     """
     cfg = ling_v3_flash_sft_64gpu_h100_bf16_config()
 
@@ -122,8 +123,6 @@ def ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config() -> ConfigContainer:
         cfg.model.expert_swiglu_limit_list = cfg.model.expert_swiglu_limit_list[:num_logical_layers]
     if cfg.model.share_expert_swiglu_limit_list is not None:
         cfg.model.share_expert_swiglu_limit_list = cfg.model.share_expert_swiglu_limit_list[:num_logical_layers]
-    cfg.model.mtp_num_layers = 0
-    cfg.model.mtp_hybrid_override_pattern = None
     cfg.model.perform_initialization = True
 
     cfg.dataset = MockGPTDatasetConfig(

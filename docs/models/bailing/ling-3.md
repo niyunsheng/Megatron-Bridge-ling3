@@ -168,20 +168,24 @@ reduced-depth functional smoke that starts from random weights and uses mock
 tokens. It keeps Flash's first group, containing five KDA blocks followed by
 one MLA block. These are **6 complete HF blocks** and **12 MCore HybridModel
 positions**, because MCore counts each attention and MLP position separately.
-The pattern is `K-K-KEKEKE+E`.
+The main pattern is `K-K-KEKEKE+E`. The baseline's one MLA + MoE MTP layer is
+retained separately; the finalized pattern is `K-K-KEKEKE+E/+E`.
 
 Hidden/head/expert dimensions and the original first-six-block dense/MoE
 schedule are preserved: two dense MLPs followed by four MoE MLPs. Clipping lists
 are sliced from the original HF configuration; all first-six-block limits are
-zero. MTP is disabled. Sequence length is **4096**, micro batch 1, global batch
+zero. MTP keeps the baseline's `mtp_loss_scaling_factor=0.0`, so its auxiliary
+loss does not contribute gradients; retaining the module alone does not
+validate MTP fine-tuning with a positive loss weight. Sequence length is
+**4096**, micro batch 1, global batch
 8, and training runs for two optimizer steps. Parallelism is TP=PP=CP=ETP=1,
 EP=8, with expert-DP1 and m-FSDP v1 full sharding. This smoke does not establish
 pretrained Flash fine-tuning quality or steady-state throughput.
 
 The smoke calls `ling_v3_flash_sft_64gpu_h100_bf16_config()` directly and keeps
 its optimizer, BF16/FP32 precision, seed, parallelism, recomputation, sequence
-length, and environment settings. It only overrides the layer prefix,
-MTP, random initialization, mock data, global batch/step horizon, schedule
+length, MTP settings, and environment settings. It only overrides the main-layer
+prefix, random initialization, mock data, global batch/step horizon, schedule
 duration, validation, and checkpoint I/O. The eight-GPU allocation changes
 dense DP to 8 and expert DP to 1 while keeping the baseline's EP8 and PP1.
 
@@ -203,7 +207,7 @@ recipe explicitly disables checkpoint loading and saving. `--max_steps`
 also determines the learning-rate decay duration. The SFT entry requires a
 checkpoint, so this random-initialization smoke uses the pretraining entry.
 
-The current six-block, sequence-4096 recipe passed four focused recipe tests,
+The previous six-block, sequence-4096 recipe with MTP disabled passed four focused recipe tests,
 the runner dry-run, and two optimizer steps on eight H100 80 GB GPUs (SLURM
 allocation 22421638, using the MCore/container revisions above). Losses were
 12.48887 and 12.37632, with finite gradient norms, no skipped/NaN iterations,
@@ -212,7 +216,7 @@ reserved memory of 42.855 GB; these are not all-rank maxima. No CPU offload was
 enabled. The second step took 0.603 s and reported 44.3 model TFLOP/s/GPU;
 one post-compilation step is not a steady-state performance measurement.
 
-The same six-block, sequence-4096 workload also completed two optimizer steps
+The same six-block, sequence-4096 workload with MTP disabled also completed two optimizer steps
 with `moe_token_dispatcher_type=flex` and `moe_flex_dispatcher_backend=deepep`
 in that environment. Losses were 12.48900 and 12.37666, gradient norms were
 10.853 and 10.119, and there were no skipped/NaN iterations (exit code zero).
@@ -221,6 +225,10 @@ runner dry-run passed. Rank 0 peak allocated/reserved memory was
 37.825 / 42.291 GB. This establishes eight-GPU training bring-up with DeepEP;
 it does not establish full-model 64-GPU SFT, strict dispatcher numerical parity,
 or a steady-state performance advantage.
+
+The current revision retains MTP. Its recipe assertions were updated, but unit
+tests and GPU training have not been rerun for this revision. The historical
+eight-GPU results above apply only to the configurations with MTP disabled.
 
 The earlier six-block, sequence-256 version passed all 146 recipe/runner tests
 and completed two optimizer steps on eight H100 GPUs (SLURM job 22414077).

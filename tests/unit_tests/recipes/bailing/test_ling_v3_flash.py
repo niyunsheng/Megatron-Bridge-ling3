@@ -119,11 +119,12 @@ def test_flash_smoke_recipe_is_exported_and_valid_without_checkpoint(monkeypatch
     assert isinstance(cfg.dataset, MockGPTDatasetConfig)
     assert cfg.scheduler.lr_decay_iters == steps
     assert cfg.scheduler.lr_warmup_iters == 0
-    assert cfg.model.num_layers == len(cfg.model.hybrid_layer_pattern) == len(cfg.model.moe_layer_freq) == 12
-    assert cfg.model.hybrid_layer_pattern == original_pattern[:12] == "K-K-KEKEKE+E"
-    assert cfg.model.hybrid_layer_pattern.count("K") == 5
-    assert cfg.model.hybrid_layer_pattern.count("+") == 1
-    assert cfg.model.hybrid_layer_pattern.count("-") == 2
+    main_pattern, mtp_pattern = cfg.model.hybrid_layer_pattern.split("/")
+    assert cfg.model.num_layers == len(main_pattern) == len(cfg.model.moe_layer_freq) == 12
+    assert main_pattern == original_pattern[:12] == "K-K-KEKEKE+E"
+    assert main_pattern.count("K") == 5
+    assert main_pattern.count("+") == 1
+    assert main_pattern.count("-") == 2
     assert sum(cfg.model.moe_layer_freq) == 4
     assert cfg.model.expert_swiglu_limit_list == source.expert_swiglu_limit_list[:6] == [0] * 6
     assert cfg.model.share_expert_swiglu_limit_list == source.share_expert_swiglu_limit_list[:6] == [0] * 6
@@ -131,7 +132,9 @@ def test_flash_smoke_recipe_is_exported_and_valid_without_checkpoint(monkeypatch
     assert cfg.model.num_moe_experts == source.num_experts
     assert cfg.model.seq_length == cfg.dataset.seq_length == 4096
     assert cfg.model.perform_initialization
-    assert cfg.model.mtp_num_layers == 0 and cfg.model.mtp_hybrid_override_pattern is None
+    assert cfg.model.mtp_num_layers == source.num_nextn_predict_layers == 1
+    assert cfg.model.mtp_hybrid_override_pattern == mtp_pattern == "+E"
+    assert cfg.model.mtp_loss_scaling_factor == 0.0
     assert cfg.model.expert_model_parallel_size == 8
     assert cfg.optimizer.lr == 5e-6 and cfg.optimizer.adam_beta2 == 0.98
     assert cfg.dataset.random_seed == cfg.rng.seed == 5678
