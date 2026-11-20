@@ -70,7 +70,12 @@ def test_flash_sft_recipe_preserves_architecture_and_fsdp_contract(monkeypatch, 
 @pytest.mark.parametrize("steps", [2, 10])
 def test_flash_smoke_recipe_is_exported_and_valid_without_checkpoint(monkeypatch, steps):
     module = importlib.import_module("megatron.bridge.recipes.bailing.h100.ling_v3_flash")
-    provider = BailingMoeV3Bridge().provider_bridge(SimpleNamespace(config=_flash_config()))
+    source = _flash_config(
+        expert_swiglu_limit_list=[0] * 35 + [4] * 7,
+        share_expert_swiglu_limit_list=[0] * 34 + [5] * 6 + [7] * 2,
+    )
+    provider = BailingMoeV3Bridge().provider_bridge(SimpleNamespace(config=source))
+    original_pattern = provider.hybrid_layer_pattern
     weight_requests = []
 
     class FakeBridge:
@@ -85,6 +90,14 @@ def test_flash_smoke_recipe_is_exported_and_valid_without_checkpoint(monkeypatch
     monkeypatch.setattr(module, "AutoBridge", FakeBridge)
     monkeypatch.setenv("WORLD_SIZE", "8")
     monkeypatch.setenv("RANK", "0")
+    baseline_factory = module.ling_v3_flash_sft_64gpu_h100_bf16_config
+    baseline_calls = []
+
+    def build_baseline():
+        baseline_calls.append(True)
+        return baseline_factory()
+
+    monkeypatch.setattr(module, "ling_v3_flash_sft_64gpu_h100_bf16_config", build_baseline)
     factory = module.ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config
     for package in (
         "megatron.bridge.recipes",
@@ -101,13 +114,25 @@ def test_flash_smoke_recipe_is_exported_and_valid_without_checkpoint(monkeypatch
     cfg.model.finalize()
 
     assert weight_requests == [False]
+    assert baseline_calls == [True]
     assert cfg.checkpoint.load is cfg.checkpoint.pretrained_checkpoint is cfg.checkpoint.save is None
     assert isinstance(cfg.dataset, MockGPTDatasetConfig)
     assert cfg.scheduler.lr_decay_iters == steps
     assert cfg.scheduler.lr_warmup_iters == 0
     assert cfg.model.num_layers == len(cfg.model.hybrid_layer_pattern) == len(cfg.model.moe_layer_freq) == 12
-    assert len(cfg.model.expert_swiglu_limit_list) == len(cfg.model.share_expert_swiglu_limit_list) == 6
+    assert cfg.model.hybrid_layer_pattern == original_pattern[:12] == "K-K-KEKEKE+E"
+    assert cfg.model.hybrid_layer_pattern.count("K") == 5
+    assert cfg.model.hybrid_layer_pattern.count("+") == 1
+    assert cfg.model.hybrid_layer_pattern.count("-") == 2
+    assert sum(cfg.model.moe_layer_freq) == 4
+    assert cfg.model.expert_swiglu_limit_list == source.expert_swiglu_limit_list[:6] == [0] * 6
+    assert cfg.model.share_expert_swiglu_limit_list == source.share_expert_swiglu_limit_list[:6] == [0] * 6
+    assert cfg.model.hidden_size == source.hidden_size
+    assert cfg.model.num_moe_experts == source.num_experts
+    assert cfg.model.seq_length == cfg.dataset.seq_length == 4096
     assert cfg.model.perform_initialization
     assert cfg.model.mtp_num_layers == 0 and cfg.model.mtp_hybrid_override_pattern is None
-    assert cfg.model.expert_model_parallel_size == 2
+    assert cfg.model.expert_model_parallel_size == 8
+    assert cfg.optimizer.lr == 5e-6 and cfg.optimizer.adam_beta2 == 0.98
+    assert cfg.dataset.random_seed == cfg.rng.seed == 5678
     assert cfg.ddp.use_megatron_fsdp and cfg.ddp.megatron_fsdp_version == 1

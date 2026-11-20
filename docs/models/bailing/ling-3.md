@@ -148,14 +148,27 @@ Pipeline parallelism is outside this baseline's validation scope.
 
 ## Flash smoke recipe on one eight-GPU H100 node
 
-`ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config` is a reduced-depth proxy
-that starts from random weights and uses mock tokens. It keeps Flash's
-hidden/head/expert dimensions, but uses six logical blocks (12 HybridModel
-positions), the pattern `K-K-KEKEKE+E`, no MTP, sequence length 256, micro batch
-1, global batch 8, and two optimizer steps. Parallelism is TP=PP=CP=ETP=1,
-EP=2, with expert-DP4 and m-FSDP v1 full sharding. Synthetic per-block clipping
-limits exercise both clipped and unclipped experts. This is a training-path
-smoke test, not pretrained Flash fine-tuning or a model-quality baseline.
+`ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config` is an **early, unoptimized**
+reduced-depth functional smoke that starts from random weights and uses mock
+tokens. It keeps Flash's first group, containing five KDA blocks followed by
+one MLA block. These are **6 complete HF blocks** and **12 MCore HybridModel
+positions**, because MCore counts each attention and MLP position separately.
+The pattern is `K-K-KEKEKE+E`.
+
+Hidden/head/expert dimensions and the original first-six-block dense/MoE
+schedule are preserved: two dense MLPs followed by four MoE MLPs. Clipping lists
+are sliced from the original HF configuration; all first-six-block limits are
+zero. MTP is disabled. Sequence length is **4096**, micro batch 1, global batch
+8, and training runs for two optimizer steps. Parallelism is TP=PP=CP=ETP=1,
+EP=8, with expert-DP1 and m-FSDP v1 full sharding. This smoke does not establish
+pretrained Flash fine-tuning quality or steady-state throughput.
+
+The smoke calls `ling_v3_flash_sft_64gpu_h100_bf16_config()` directly and keeps
+its optimizer, BF16/FP32 precision, seed, parallelism, recomputation, and
+environment settings. It only overrides the layer prefix, sequence length,
+MTP, random initialization, mock data, global batch/step horizon, schedule
+duration, validation, and checkpoint I/O. The eight-GPU allocation changes
+dense DP to 8 and expert DP to 1 while keeping the baseline's EP8 and PP1.
 
 From the repository root inside a compatible environment on an allocated
 eight-GPU node:
@@ -175,12 +188,18 @@ recipe explicitly disables checkpoint loading and saving. `--max_steps`
 also determines the learning-rate decay duration. The SFT entry requires a
 checkpoint, so this random-initialization smoke uses the pretraining entry.
 
-The recipe and public runner tests passed all 146 cases on H100. The command
-above then completed two optimizer steps on eight H100 GPUs with finite losses
-12.4880 and 12.4145, finite gradient norms, no skipped/NaN iterations, and exit
-code zero (SLURM job 22414077, using the MCore/container revisions above).
-This validates the repository recipe through `run_recipe.py`, independently
-of the earlier standalone integration smoke.
+The current six-block, sequence-4096 recipe passed four focused recipe tests,
+the runner dry-run, and two optimizer steps on eight H100 80 GB GPUs (SLURM
+allocation 22421638, using the MCore/container revisions above). Losses were
+12.48887 and 12.37632, with finite gradient norms, no skipped/NaN iterations,
+and exit code zero. Rank 0 reported peak allocated memory of 37.721 GB and peak
+reserved memory of 42.855 GB; these are not all-rank maxima. No CPU offload was
+enabled. The second step took 0.603 s and reported 44.3 model TFLOP/s/GPU;
+one post-compilation step is not a steady-state performance measurement.
+
+The earlier six-block, sequence-256 version passed all 146 recipe/runner tests
+and completed two optimizer steps on eight H100 GPUs (SLURM job 22414077).
+Those historical results apply to the previous smaller workload.
 
 <!-- BEGIN GENERATED VERIFIED CONFIGURATIONS -->
 
