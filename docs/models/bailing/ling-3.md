@@ -146,6 +146,42 @@ can omit the mask that this eager implementation needs. A default HF run is
 therefore not a sufficient causal-attention reference.
 Pipeline parallelism is outside this baseline's validation scope.
 
+## Flash smoke recipe on one eight-GPU H100 node
+
+`ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config` is a reduced-depth proxy
+that starts from random weights and uses mock tokens. It keeps Flash's
+hidden/head/expert dimensions, but uses six logical blocks (12 HybridModel
+positions), the pattern `K-K-KEKEKE+E`, no MTP, sequence length 256, micro batch
+1, global batch 8, and two optimizer steps. Parallelism is TP=PP=CP=ETP=1,
+EP=2, with expert-DP4 and m-FSDP v1 full sharding. Synthetic per-block clipping
+limits exercise both clipped and unclipped experts. This is a training-path
+smoke test, not pretrained Flash fine-tuning or a model-quality baseline.
+
+From the repository root inside a compatible environment on an allocated
+eight-GPU node:
+
+```bash
+export LING_V3_FLASH_HF_PATH=/path/to/pinned/ling-flash-snapshot
+uv run python -m torch.distributed.run \
+  --standalone --nnodes=1 --nproc_per_node=8 \
+  scripts/training/run_recipe.py \
+  --recipe ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config \
+  --mode pretrain --max_steps 2
+```
+
+The HF path supplies model configuration and tokenizer files, not pretrained
+weights. Omit `--load_dir`, `--pretrained_checkpoint`, and `--save_dir`: the
+recipe explicitly disables checkpoint loading and saving. `--max_steps`
+also determines the learning-rate decay duration. The SFT entry requires a
+checkpoint, so this random-initialization smoke uses the pretraining entry.
+
+The recipe and public runner tests passed all 146 cases on H100. The command
+above then completed two optimizer steps on eight H100 GPUs with finite losses
+12.4880 and 12.4145, finite gradient norms, no skipped/NaN iterations, and exit
+code zero (SLURM job 22414077, using the MCore/container revisions above).
+This validates the repository recipe through `run_recipe.py`, independently
+of the earlier standalone integration smoke.
+
 <!-- BEGIN GENERATED VERIFIED CONFIGURATIONS -->
 
 ## Verified configurations

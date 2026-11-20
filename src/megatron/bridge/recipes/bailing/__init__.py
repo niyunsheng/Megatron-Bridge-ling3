@@ -16,6 +16,7 @@
 from megatron.bridge.recipes.bailing.h100.ling_v3_flash import (
     ling_v3_flash_sft_64gpu_h100_bf16_config,
     ling_v3_flash_sft_config,
+    ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config,
 )
 from megatron.bridge.recipes.bailing.h100.ling_v3_tiny_base import (
     ling_v3_tiny_base_sft_8gpu_h100_bf16_config,
@@ -26,6 +27,7 @@ from megatron.bridge.recipes.bailing.h100.ling_v3_tiny_base import (
 __all__ = [
     "ling_v3_flash_sft_64gpu_h100_bf16_config",
     "ling_v3_flash_sft_config",
+    "ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config",
     "ling_v3_tiny_base_sft_8gpu_h100_bf16_config",
     "ling_v3_tiny_base_sft_config",
 ]

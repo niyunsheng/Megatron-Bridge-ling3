@@ -6,6 +6,7 @@ import torch
 from megatron.core.transformer.enums import AttnBackend
 
 from megatron.bridge.models.bailing.bailing_moe3_bridge import BailingMoeV3Bridge
+from megatron.bridge.training.config import MockGPTDatasetConfig
 from tests.unit_tests.models.bailing.test_bailing_moe3_bridge import _flash_config, requires_ling_mcore
 
 
@@ -64,3 +65,49 @@ def test_flash_sft_recipe_preserves_architecture_and_fsdp_contract(monkeypatch, 
     assert cfg.model.mtp_loss_scaling_factor == 0
     assert cfg.model.bias_activation_fusion is False
     assert cfg.env_vars["CUDA_DEVICE_MAX_CONNECTIONS"] != "1"
+
+
+@pytest.mark.parametrize("steps", [2, 10])
+def test_flash_smoke_recipe_is_exported_and_valid_without_checkpoint(monkeypatch, steps):
+    module = importlib.import_module("megatron.bridge.recipes.bailing.h100.ling_v3_flash")
+    provider = BailingMoeV3Bridge().provider_bridge(SimpleNamespace(config=_flash_config()))
+    weight_requests = []
+
+    class FakeBridge:
+        @staticmethod
+        def from_hf_pretrained(path, **kwargs):
+            return FakeBridge()
+
+        def to_megatron_provider(self, *, load_weights):
+            weight_requests.append(load_weights)
+            return provider
+
+    monkeypatch.setattr(module, "AutoBridge", FakeBridge)
+    monkeypatch.setenv("WORLD_SIZE", "8")
+    monkeypatch.setenv("RANK", "0")
+    factory = module.ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config
+    for package in (
+        "megatron.bridge.recipes",
+        "megatron.bridge.recipes.bailing",
+        "megatron.bridge.recipes.bailing.h100",
+    ):
+        assert getattr(importlib.import_module(package), factory.__name__) is factory
+    cfg = factory()
+    cfg.train.train_iters = steps
+    # Check recipe assignments before MCore adds its derived private state.
+    for config in (cfg.model, cfg.ddp, cfg.scheduler, cfg.train, cfg.checkpoint):
+        assert set(vars(config)) <= set(config.__dataclass_fields__)
+    cfg.validate()
+    cfg.model.finalize()
+
+    assert weight_requests == [False]
+    assert cfg.checkpoint.load is cfg.checkpoint.pretrained_checkpoint is cfg.checkpoint.save is None
+    assert isinstance(cfg.dataset, MockGPTDatasetConfig)
+    assert cfg.scheduler.lr_decay_iters == steps
+    assert cfg.scheduler.lr_warmup_iters == 0
+    assert cfg.model.num_layers == len(cfg.model.hybrid_layer_pattern) == len(cfg.model.moe_layer_freq) == 12
+    assert len(cfg.model.expert_swiglu_limit_list) == len(cfg.model.share_expert_swiglu_limit_list) == 6
+    assert cfg.model.perform_initialization
+    assert cfg.model.mtp_num_layers == 0 and cfg.model.mtp_hybrid_override_pattern is None
+    assert cfg.model.expert_model_parallel_size == 2
+    assert cfg.ddp.use_megatron_fsdp and cfg.ddp.megatron_fsdp_version == 1
