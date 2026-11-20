@@ -18,6 +18,7 @@ from typing import Any
 
 from megatron.core.models.hybrid.hybrid_model import HybridModel
 
+from megatron.bridge.models.bailing.bailing_moe3_activation import validate_swiglu_limits
 from megatron.bridge.models.bailing.bailing_moe3_mappings import (
     _BailingMoe3KDAConv1dMapping,
     _BailingMoe3KDAInProjMapping,
@@ -411,6 +412,16 @@ class BailingMoeV3Bridge(MegatronModelBridge):
         provider.hybrid_layer_pattern = pattern
         provider.num_layers = len(pattern)
         provider.hybrid_stack_spec = bailing_moe3_hybrid_stack_spec
+        for field in ("expert_swiglu_limit_list", "share_expert_swiglu_limit_list"):
+            setattr(
+                provider,
+                field,
+                validate_swiglu_limits(
+                    getattr(hf_config, field, None), num_layers=hf_config.num_hidden_layers, field=field
+                ),
+            )
+        if any(provider.expert_swiglu_limit_list or []) or any(provider.share_expert_swiglu_limit_list or []):
+            provider.bias_activation_fusion = False
 
         provider.normalization = "RMSNorm"
         provider.gated_linear_unit = True
@@ -573,6 +584,10 @@ class BailingMoeV3Bridge(MegatronModelBridge):
             num_nextn_predict_layers=actual_mtp_layers,
             mtp_use_kda=False,
         )
+        for field in ("expert_swiglu_limit_list", "share_expert_swiglu_limit_list"):
+            limits = validate_swiglu_limits(getattr(provider, field, None), num_layers=num_hidden_layers, field=field)
+            if limits is not None:
+                hf_config[field] = limits
         return hf_config
 
     def mapping_registry(self) -> MegatronMappingRegistry:

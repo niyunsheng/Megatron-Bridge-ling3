@@ -16,6 +16,8 @@
 
 from dataclasses import dataclass
 
+from megatron.core.transformer.enums import AttnBackend
+
 from megatron.bridge.models.hybrid.hybrid_provider import HybridModelProvider
 from megatron.bridge.models.transformer_config import MLATransformerConfig
 
@@ -25,3 +27,9 @@ class BailingMoe3HybridProvider(HybridModelProvider, MLATransformerConfig):
     """Combine HybridModel construction with MLA configuration for Ling 3.0."""
 
     multi_latent_attention: bool = True
+    # Hybrid's Flash-only default excludes cuDNN; FlashAttention 2 cannot
+    # handle Ling MLA's unequal Q/K and V head dimensions on H100.
+    attention_backend: AttnBackend = AttnBackend.auto
+    # HF logical block indices, not HybridModel's attention/MLP positions.
+    expert_swiglu_limit_list: list[float] | None = None
+    share_expert_swiglu_limit_list: list[float] | None = None
