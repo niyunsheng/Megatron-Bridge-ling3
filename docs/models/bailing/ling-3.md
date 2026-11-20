@@ -17,12 +17,14 @@ See the [Bailing examples](https://github.com/NVIDIA-NeMo/Megatron-Bridge/tree/m
 `ling_v3_flash_sft_64gpu_h100_bf16_config` targets 64 H100 80 GB GPUs with
 TP=PP=CP=ETP=1, EP=8, and Megatron-FSDP **v1** full parameter/gradient/optimizer
 sharding. Dense data parallelism is 64; expert data parallelism is 8. The recipe
-uses BF16 parameters, FP32 main parameters and gradients, sequence length 2048,
-micro batch 1, global batch 128, and 100 SQuAD SFT steps, padding samples to 2048.
+uses BF16 parameters, FP32 main parameters and gradients, sequence length 4096,
+micro batch 1, global batch 128, and 100 SQuAD SFT steps, padding samples to 4096.
 Packing, FP8, CUDA graphs,
 activation fusion, and shared-expert overlap are disabled. Checkpoints use
-`fsdp_dtensor` at steps 50 and 100. The functional baseline below completed;
-default-mode numerical replay and bitwise reproducibility remain limitations.
+`fsdp_dtensor` at steps 50 and 100. The historical functional baseline below
+completed at sequence length 2048; the updated 4096 setting has not been
+validated on the full 64-GPU model. Default-mode numerical replay and bitwise
+reproducibility remain limitations.
 
 The Flash checkpoint's `expert_swiglu_limit_list` and
 `share_expert_swiglu_limit_list` are preserved on import and export. Entries
@@ -127,11 +129,24 @@ distributed environment, after numerical validation:
 
 ```bash
 export LING_V3_FLASH_HF_PATH=/path/to/pinned/ling-flash-snapshot
-uv run python scripts/training/run_recipe.py \
+python scripts/training/run_recipe.py \
   --recipe ling_v3_flash_sft_64gpu_h100_bf16_config --mode sft \
   --pretrained_checkpoint /path/to/validated/checkpoint \
   --save_dir /path/to/baseline/checkpoints
 ```
+
+The default MoE dispatcher is `alltoall`. To select DeepEP, append both
+overrides to the same runner command:
+
+```bash
+model.moe_token_dispatcher_type=flex model.moe_flex_dispatcher_backend=deepep
+```
+
+This uses MCore's native dispatcher and requires an importable, compatible
+`deep_ep` package in the training environment. Ling already uses FP32 router
+probabilities, as DeepEP requires. EP8 and m-FSDP v1 remain unchanged; no MCore
+or m-FSDP source changes are needed. The same overrides apply to the smoke
+recipe below. Dispatcher throughput requires a matched steady-state comparison.
 
 The public HF revision is pinned to
 `fcc60a52b34c69c6271d0ac8a8cb0815020b6a43`. A local snapshot must correspond to
@@ -164,8 +179,8 @@ EP=8, with expert-DP1 and m-FSDP v1 full sharding. This smoke does not establish
 pretrained Flash fine-tuning quality or steady-state throughput.
 
 The smoke calls `ling_v3_flash_sft_64gpu_h100_bf16_config()` directly and keeps
-its optimizer, BF16/FP32 precision, seed, parallelism, recomputation, and
-environment settings. It only overrides the layer prefix, sequence length,
+its optimizer, BF16/FP32 precision, seed, parallelism, recomputation, sequence
+length, and environment settings. It only overrides the layer prefix,
 MTP, random initialization, mock data, global batch/step horizon, schedule
 duration, validation, and checkpoint I/O. The eight-GPU allocation changes
 dense DP to 8 and expert DP to 1 while keeping the baseline's EP8 and PP1.
@@ -175,7 +190,7 @@ eight-GPU node:
 
 ```bash
 export LING_V3_FLASH_HF_PATH=/path/to/pinned/ling-flash-snapshot
-uv run python -m torch.distributed.run \
+python -m torch.distributed.run \
   --standalone --nnodes=1 --nproc_per_node=8 \
   scripts/training/run_recipe.py \
   --recipe ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config \
@@ -196,6 +211,16 @@ and exit code zero. Rank 0 reported peak allocated memory of 37.721 GB and peak
 reserved memory of 42.855 GB; these are not all-rank maxima. No CPU offload was
 enabled. The second step took 0.603 s and reported 44.3 model TFLOP/s/GPU;
 one post-compilation step is not a steady-state performance measurement.
+
+The same six-block, sequence-4096 workload also completed two optimizer steps
+with `moe_token_dispatcher_type=flex` and `moe_flex_dispatcher_backend=deepep`
+in that environment. Losses were 12.48900 and 12.37666, gradient norms were
+10.853 and 10.119, and there were no skipped/NaN iterations (exit code zero).
+The updated baseline/smoke recipe tests passed all four cases and the DeepEP
+runner dry-run passed. Rank 0 peak allocated/reserved memory was
+37.825 / 42.291 GB. This establishes eight-GPU training bring-up with DeepEP;
+it does not establish full-model 64-GPU SFT, strict dispatcher numerical parity,
+or a steady-state performance advantage.
 
 The earlier six-block, sequence-256 version passed all 146 recipe/runner tests
 and completed two optimizer steps on eight H100 GPUs (SLURM job 22414077).

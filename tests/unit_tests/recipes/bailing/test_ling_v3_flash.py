@@ -59,7 +59,7 @@ def test_flash_sft_recipe_preserves_architecture_and_fsdp_contract(monkeypatch, 
     assert cfg.checkpoint.save_interval == 50
     assert cfg.train.global_batch_size == 128 and cfg.train.micro_batch_size == 1
     assert cfg.train.train_iters == 100
-    assert cfg.model.seq_length == cfg.dataset.seq_length == 2048
+    assert cfg.model.seq_length == cfg.dataset.seq_length == 4096
     assert cfg.dataset.enable_offline_packing is False
     assert cfg.dataset.dataset_kwargs["pad_to_max_length"] is True
     assert cfg.model.mtp_loss_scaling_factor == 0

@@ -55,7 +55,7 @@ def ling_v3_flash_sft_64gpu_h100_bf16_config() -> ConfigContainer:
     cfg.model.expert_tensor_parallel_size = 1
     cfg.model.sequence_parallel = False
     cfg.model.init_model_with_meta_device = True
-    cfg.model.seq_length = 2048
+    cfg.model.seq_length = 4096
     cfg.model.transformer_impl = "transformer_engine"
     cfg.model.moe_token_dispatcher_type = "alltoall"
     cfg.model.moe_shared_expert_overlap = False
@@ -80,7 +80,7 @@ def ling_v3_flash_sft_64gpu_h100_bf16_config() -> ConfigContainer:
     cfg.ddp.megatron_fsdp_grad_comm_dtype = torch.float32
     cfg.optimizer.use_distributed_optimizer = True
 
-    cfg.dataset = default_squad_config(seq_length=2048, enable_offline_packing=False)
+    cfg.dataset = default_squad_config(seq_length=cfg.model.seq_length, enable_offline_packing=False)
     cfg.dataset.dataset_kwargs["pad_to_max_length"] = True
     cfg.train.micro_batch_size = 1
     cfg.train.global_batch_size = 128
@@ -125,10 +125,9 @@ def ling_v3_flash_smoke_pretrain_8gpu_h100_bf16_config() -> ConfigContainer:
     cfg.model.mtp_num_layers = 0
     cfg.model.mtp_hybrid_override_pattern = None
     cfg.model.perform_initialization = True
-    cfg.model.seq_length = 4096
 
     cfg.dataset = MockGPTDatasetConfig(
-        seq_length=4096,
+        seq_length=cfg.model.seq_length,
         random_seed=cfg.rng.seed,
         reset_attention_mask=False,
         reset_position_ids=False,
