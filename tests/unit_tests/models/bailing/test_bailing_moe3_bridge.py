@@ -8,7 +8,6 @@ import torch
 from megatron.core.extensions.transformer_engine import TENorm
 from megatron.core.models.hybrid.hybrid_layer_specs import hybrid_stack_spec
 from megatron.core.transformer.identity_op import IdentityOp
-from megatron.core.transformer.multi_latent_attention import MLASelfAttention
 from torch import nn
 
 from megatron.bridge.models.bailing import bailing_moe3_spec as ling_spec
@@ -87,6 +86,21 @@ def test_provider_rejects_missing_mcore_capability_before_config_mapping(monkeyp
 
 _TINY_GOLDEN_PATTERN = "K-KEKE+EKEKEKE+EKEKEKE+EKEKEKE+EKEKEKE+EKEKEKE+E"
 _FLASH_GOLDEN_PATTERN = "K-K-KEKEKE+EKEKEKEKEKE+EKEKEKEKEKE+EKEKEKEKEKE+EKEKEKEKEKE+EKEKEKEKEKE+EKEKEKEKEKE+E"
+
+
+@requires_ling_mcore
+def test_flash_clipping_schedules_survive_config_roundtrip():
+    routed = [0] * 35 + [4] * 7
+    shared = [0] * 34 + [5] * 6 + [7] * 2
+    hf_config = _flash_config(expert_swiglu_limit_list=routed, share_expert_swiglu_limit_list=shared)
+    bridge = BailingMoeV3Bridge()
+    provider = bridge.provider_bridge(SimpleNamespace(config=hf_config))
+    exported = bridge.megatron_to_hf_config(provider)
+    assert exported["expert_swiglu_limit_list"] == routed
+    assert exported["share_expert_swiglu_limit_list"] == shared
+    assert provider.bias_activation_fusion is False
+    spec = bailing_moe3_hybrid_stack_spec(provider)
+    assert spec.submodules.moe_layer.module is ling_spec.BailingMoe3MoETransformerLayer
 
 
 def _tiny_config(**overrides):
@@ -466,7 +480,7 @@ def test_flash_spec_uses_mcore_native_direct_q_and_standalone_kv_norm() -> None:
     spec = bailing_moe3_hybrid_stack_spec(_flash_config())
     mla = spec.submodules.mla_layer.submodules.self_attention
 
-    assert mla.module is MLASelfAttention
+    assert mla.module is ling_spec.BailingMoe3MLASelfAttention
     assert mla.submodules.q_layernorm is IdentityOp
     assert mla.submodules.kv_layernorm is TENorm
 

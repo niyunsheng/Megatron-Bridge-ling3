@@ -16,12 +16,62 @@
 from __future__ import annotations
 
 import copy
+from functools import partial
 
 from megatron.core.extensions.transformer_engine import TENorm
 from megatron.core.models.hybrid.hybrid_layer_allocation import Symbols
 from megatron.core.models.hybrid.hybrid_layer_specs import hybrid_stack_spec
 from megatron.core.transformer import ModuleSpec
+from megatron.core.transformer.multi_latent_attention import MLASelfAttention
 from megatron.core.transformer.transformer_config import MLATransformerConfig
+from megatron.core.transformer.transformer_layer import MoETransformerLayer, TransformerLayerSubmodules
+
+from megatron.bridge.models.bailing.bailing_moe3_activation import build_bailing_moe3_moe
+
+
+class BailingMoe3MLASelfAttention(MLASelfAttention):
+    """Native MLA with Flash's KV-only latent normalization.
+
+    MCore's QK-norm resolver also adds a fused input norm to direct Q.
+    Ling already normalizes the block input and has no such Q norm. Retain
+    the resolver's validation and KV selection, replacing only that builder.
+    All attention arithmetic and checkpoint behavior remain native.
+    """
+
+    def _resolve_qk_norm_config(self, submodules):
+        resolved = super()._resolve_qk_norm_config(submodules)
+        if self.config.q_lora_rank is None:
+            resolved["linear_q_proj"] = submodules.linear_q_proj
+        return resolved
+
+
+class BailingMoe3MoETransformerLayer(MoETransformerLayer):
+    """Bind global Hybrid layer indices before native MoE construction.
+
+    TransformerLayer passes its layer number to MoELayer only *after* building
+    experts. Bind it here so the activation builders receive the correct limits.
+    Forward, backward, and sharded state handling remain inherited from MCore.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: MLATransformerConfig,
+        submodules: TransformerLayerSubmodules,
+        layer_number: int = 1,
+        expert_limits: list[float] | None,
+        shared_limits: list[float] | None,
+        **kwargs: object,
+    ) -> None:
+        submodules = copy.deepcopy(submodules)
+        submodules.mlp = partial(
+            build_bailing_moe3_moe,
+            builder=submodules.mlp,
+            layer_number=layer_number,
+            expert_limits=expert_limits,
+            shared_limits=shared_limits,
+        )
+        super().__init__(config=config, submodules=submodules, layer_number=layer_number, **kwargs)
 
 
 def _missing_mcore_features() -> tuple[str, ...]:
@@ -61,8 +111,8 @@ def bailing_moe3_hybrid_stack_spec(config: object) -> ModuleSpec:
     """Return the Transformer Engine Hybrid spec required by Ling 3.0.
 
     Both public variants store the MLA KV layernorm vector. Tiny additionally
-    stores the low-rank Q layernorm, while Flash uses direct Q and keeps the
-    default identity builder. All projection builders retain MCore defaults.
+    stores the low-rank Q layernorm, while Flash uses direct Q without a Q
+    norm. Flash's resolver retains the declared native plain Q projection.
 
     Args:
         config: Provider whose ``q_lora_rank`` selects the low-rank Q spec used
@@ -76,6 +126,15 @@ def bailing_moe3_hybrid_stack_spec(config: object) -> ModuleSpec:
     mla_attention = spec.submodules.mla_layer.submodules.self_attention.submodules
     if getattr(config, "q_lora_rank", None) is not None:
         mla_attention.q_layernorm = TENorm
+    else:
+        spec.submodules.mla_layer.submodules.self_attention.module = BailingMoe3MLASelfAttention
     mla_attention.kv_layernorm = TENorm
+
+    expert_limits = getattr(config, "expert_swiglu_limit_list", None)
+    shared_limits = getattr(config, "share_expert_swiglu_limit_list", None)
+    if expert_limits is not None or shared_limits is not None:
+        moe = spec.submodules.moe_layer
+        moe.module = BailingMoe3MoETransformerLayer
+        moe.params.update(expert_limits=expert_limits, shared_limits=shared_limits)
 
     return spec
